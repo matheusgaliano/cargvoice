@@ -17,3 +17,6 @@ def create_product(db: Session, product: schemas.ProductCreate):
     db.commit()
     db.refresh(db_product)
     return db_product
+
+def get_products(db: Session, skip: int = 0, limit: int = 100):
+    return db.query(models.Product).offset(skip).limit(limit).all()

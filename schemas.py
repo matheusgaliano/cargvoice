@@ -11,6 +11,13 @@ class ProductBase(BaseModel):
 class ProductCreate(ProductBase):
     pass
 
+class ProductUpdate(BaseModel):
+    erp_code: Optional[str] = None
+    name: Optional[str] = None
+    factor_pallet: Optional[int] = None
+    factor_layer: Optional[int] = None
+    factor_box: Optional[int] = None
+
 class ProductResponse(ProductBase):
     id: int
     keywords: Optional[str] = None

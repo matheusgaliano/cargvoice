@@ -54,6 +54,14 @@ function App() {
     recognition.start()
   }
 
+  const sanitizeText = (text) => {
+    if (!text) return ""
+    return text
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
+      .replace(/(\d+)\s+(l|ml)/g, "$1$2") 
+  }
+
   const normalizeNumbers = (text) => {
     const map = {
       'um': '1', 'uma': '1',
@@ -67,75 +75,63 @@ function App() {
       'nove': '9',
       'dez': '10'
     }
-    
     return text.split(' ').map(word => map[word.toLowerCase()] || word).join(' ')
   }
 
   const processCommand = (text) => {
-    let lowerText = normalizeNumbers(text.toLowerCase())
+    let rawText = normalizeNumbers(text)
+    
+    let lowerText = rawText.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "")
     
     const countRegex = /(\d+)\s*(paletes|palete|camadas|camada|lastros|lastro|caixas|caixa|fardos|fardo|unidades|unidade)?/
     const match = lowerText.match(countRegex)
 
     let quantity = 1
     let unit = 'caixa'
-    let textToSearch = lowerText
+    let textToSearch = rawText 
 
     if (match) {
       quantity = parseInt(match[1])
-      
       if (match[2]) {
         const unitWord = match[2]
         if (unitWord.includes('palet')) unit = 'palete'
         if (unitWord.includes('camad') || unitWord.includes('lastro')) unit = 'camada'
       }
-
       textToSearch = lowerText.replace(match[0], '')
     }
 
     let searchTerm = textToSearch
       .replace(/\bde\b|\bdo\b|\bda\b|\bcom\b/g, '')
       .replace(/paletes|palete|camadas|camada|lastros|lastro|caixas|caixa|fardos|fardo|unidades|unidade/g, '')
-      
-    // AQUI ESTÁ A CORREÇÃO: Padronização e Fusão de Unidades
-    // 1. Padroniza escrita de litros e mls
+    
     searchTerm = searchTerm.replace(/\blitros\b|\blitro\b/g, 'l')
     searchTerm = searchTerm.replace(/\bmls\b/g, 'ml')
     
-    // 2. Cola o número na unidade (ex: "1 l" vira "1l", "600 ml" vira "600ml")
-    searchTerm = searchTerm.replace(/(\d)\s+(l|ml)/g, '$1$2')
-    
-    searchTerm = searchTerm.trim()
+    const cleanSearchTerm = sanitizeText(searchTerm).trim()
 
     const matches = products.filter(p => {
-      const productText = (p.name + " " + (p.keywords || "")).toLowerCase()
-      const searchParts = searchTerm.split(' ').filter(part => part.length > 0)
+      const productText = sanitizeText(p.name + " " + (p.keywords || ""))
+      
+      const searchParts = cleanSearchTerm.split(' ').filter(part => part.length > 0)
       
       return searchParts.every(part => {
-        // Se a parte for "1l", "600ml", "350ml", busca como texto normal
-        if (/\d+(l|ml)/.test(part)) {
-          return productText.includes(part)
-        }
-        // Se for um número sozinho (ex: "1"), exige que seja uma palavra exata
-        // para não achar o "1" dentro de "12" ou "2021"
         if (/^\d+$/.test(part)) {
           const numberRegex = new RegExp(`\\b${part}\\b`)
           return numberRegex.test(productText)
         }
-        // Para texto normal (ex: "skol"), busca normal
         return productText.includes(part)
       })
     })
 
     if (matches.length === 0) {
-      setFeedback(`Não achei "${searchTerm}". Tente ser mais específico.`)
+      setFeedback(`Não achei "${cleanSearchTerm}". Tente ser mais específico.`)
       setSearchMatches([])
     } else if (matches.length === 1) {
       setFeedback("Produto encontrado!")
       setSearchMatches([])
       setSelectedProduct(matches[0])
     } else {
-      setFeedback(`Achei ${matches.length} opções para "${searchTerm}". Selecione:`)
+      setFeedback(`Achei ${matches.length} opções para "${cleanSearchTerm}". Selecione:`)
       setSearchMatches(matches)
       setSelectedProduct(null)
     }

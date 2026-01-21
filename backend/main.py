@@ -30,3 +30,20 @@ def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)
 def read_products(skip: int = 0, limit: int = 1000, db: Session = Depends(get_db)):
     products = crud.get_products(db, skip=skip, limit=limit)
     return products
+
+@app.get("/voice_search/", response_model=schemas.VoiceSearchResponse)
+def voice_search(query: str, db: Session = Depends(get_db)):
+    products = crud.voice_search(db, query)
+
+    return {
+        "products": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "code": p.erp_code,
+                "palete": p.factor_pallet,
+                "lastro": p.factor_layer,
+            }
+            for p in products
+        ]
+    }

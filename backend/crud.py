@@ -39,3 +39,11 @@ def update_product(db: Session, product_id: int, product: schemas.ProductUpdate)
     db.commit()
     db.refresh(db_product)
     return db_product
+
+def voice_search(db: Session, query: str):
+    return (
+        db.query(models.Product)
+        .filter(models.Product.keywords.ilike(f"%{query.lower()}%"))
+        .limit(5)
+        .all()
+    )

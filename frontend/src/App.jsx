@@ -1,312 +1,239 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
+import React, { useState, useEffect } from 'react'
 import './App.css'
+import logoCarg from './assets/logo-carg.png'
+
+const API_BASE_URL = "https://cargvoice-backend.onrender.com"
 
 function App() {
-  const [products, setProducts] = useState([]) 
-  const [feedback, setFeedback] = useState('Clique para começar')
-  
   const [isListening, setIsListening] = useState(false)
-  const [transcript, setTranscript] = useState('')
-
-  const [searchMatches, setSearchMatches] = useState([]) 
-  const [selectedProduct, setSelectedProduct] = useState(null) 
-  const [currentQty, setCurrentQty] = useState(0) 
-  const [currentUnit, setCurrentUnit] = useState('caixa') 
-
-  const [inventoryList, setInventoryList] = useState([]) 
+  const [status, setStatus] = useState("Toque para iniciar")
+  const [transcript, setTranscript] = useState("")
+  const [report, setReport] = useState({})
+  const [recognition, setRecognition] = useState(null)
 
   useEffect(() => {
-    axios.get('http://localhost:8000/products/?limit=1000')
-      .then(response => {
-        setProducts(response.data)
-        setFeedback(`Pronto. ${response.data.length} produtos carregados.`)
-      })
-      .catch((error) => {
-        console.error(error)
-        setFeedback("Erro de conexão com o Backend.")
-      })
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const Speech = window.SpeechRecognition || window.webkitSpeechRecognition
+      const rec = new Speech()
+      rec.lang = 'pt-BR'
+      rec.interimResults = false
+      rec.maxAlternatives = 1
+
+      rec.onstart = () => {
+        setIsListening(true)
+        setStatus("Ouvindo...")
+        setTranscript("")
+      }
+
+      rec.onend = () => {
+        setIsListening(false)
+        setStatus(prev => prev === "Ouvindo..." ? "Toque para iniciar" : prev)
+      }
+
+      rec.onresult = (event) => {
+        const text = event.results[0][0].transcript
+        setTranscript(text)
+        setStatus("Processando...")
+        processCommand(text)
+      }
+      
+      setRecognition(rec)
+    } else {
+      setStatus("Navegador não suportado")
+    }
   }, [])
 
-  const startListening = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SpeechRecognition) { alert("Navegador sem suporte a voz."); return }
-
-    const recognition = new SpeechRecognition()
-    recognition.lang = 'pt-BR'
-    recognition.continuous = false
-    
-    recognition.onstart = () => {
-      setIsListening(true)
-      setFeedback("Ouvindo...")
-      setSearchMatches([]) 
-      setSelectedProduct(null)
-    }
-
-    recognition.onend = () => setIsListening(false)
-
-    recognition.onresult = (event) => {
-      const text = event.results[0][0].transcript
-      setTranscript(text)
-      processCommand(text)
-    }
-
-    recognition.start()
+  const toggleMic = () => {
+    if (!recognition) return
+    if (isListening) recognition.stop()
+    else recognition.start()
   }
 
-  const sanitizeText = (text) => {
-    if (!text) return ""
-    return text
-      .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-      .replace(/(\d+)\s+(l|ml)/g, "$1$2") 
-  }
+  const processCommand = async (text) => {
+    let qty = 1
+    let unitType = 'unidade'
+    let term = text
 
-  const normalizeNumbers = (text) => {
-    const map = {
-      'um': '1', 'uma': '1',
-      'dois': '2', 'duas': '2',
-      'tres': '3', 'três': '3',
-      'quatro': '4',
-      'cinco': '5',
-      'seis': '6', 'meia': '6',
-      'sete': '7',
-      'oito': '8',
-      'nove': '9',
-      'dez': '10'
+    const numberMatch = text.match(/^(\d+)/)
+    if (numberMatch) {
+      qty = parseInt(numberMatch[0])
+      term = text.replace(/^(\d+)/, '').trim()
     }
-    return text.split(' ').map(word => map[word.toLowerCase()] || word).join(' ')
-  }
 
-  const processCommand = (text) => {
-    let rawText = normalizeNumbers(text)
+    const lower = term.toLowerCase()
+    if (lower.includes('palete') || lower.includes('pallet')) {
+      unitType = 'palete'
+      term = term.replace(/(paletes|palete|pallet|pallets)(\s+de)?/gi, '').trim()
+    } else if (lower.includes('lastro') || lower.includes('camada')) {
+      unitType = 'lastro'
+      term = term.replace(/(lastros|lastro|camada|camadas)(\s+de)?/gi, '').trim()
+    }
+
+    setStatus(`Buscando: ${term}...`)
     
-    let lowerText = rawText.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, "")
-    
-    const countRegex = /(\d+)\s*(paletes|palete|camadas|camada|lastros|lastro|caixas|caixa|fardos|fardo|unidades|unidade)?/
-    const match = lowerText.match(countRegex)
+    try {
+      const res = await fetch(`${API_BASE_URL}/voice_search/?query=${encodeURIComponent(term)}`)
+      if (!res.ok) throw new Error("Erro na API")
+      const data = await res.json()
 
-    let quantity = 1
-    let unit = 'caixa'
-    let textToSearch = rawText 
-
-    if (match) {
-      quantity = parseInt(match[1])
-      if (match[2]) {
-        const unitWord = match[2]
-        if (unitWord.includes('palet')) unit = 'palete'
-        if (unitWord.includes('camad') || unitWord.includes('lastro')) unit = 'camada'
+      if (data.products && data.products.length > 0) {
+        addToReport(data.products[0], qty, unitType)
+      } else {
+        setStatus(`Não encontrei "${term}"`)
       }
-      textToSearch = lowerText.replace(match[0], '')
+    } catch (error) {
+      console.error(error)
+      setStatus("Erro de conexão")
+    }
+  }
+
+  const addToReport = (product, inputQty, inputType) => {
+    let finalQty = inputQty
+    let factor = 1
+    let typeLabel = "UN"
+
+    if (inputType === 'palete') {
+      factor = product.palete || 0
+      typeLabel = "PAL"
+    } else if (inputType === 'lastro') {
+      factor = product.lastro || 0
+      typeLabel = "LAS"
     }
 
-    let searchTerm = textToSearch
-      .replace(/\bde\b|\bdo\b|\bda\b|\bcom\b/g, '')
-      .replace(/paletes|palete|camadas|camada|lastros|lastro|caixas|caixa|fardos|fardo|unidades|unidade/g, '')
-    
-    searchTerm = searchTerm.replace(/\blitros\b|\blitro\b/g, 'l')
-    searchTerm = searchTerm.replace(/\bmls\b/g, 'ml')
-    
-    const cleanSearchTerm = sanitizeText(searchTerm).trim()
+    if (factor === 0 && inputType !== 'unidade') {
+      setStatus(`Erro: ${product.name} sem cadastro de ${inputType}`)
+      return
+    }
 
-    const matches = products.filter(p => {
-      const productText = sanitizeText(p.name + " " + (p.keywords || ""))
-      
-      const searchParts = cleanSearchTerm.split(' ').filter(part => part.length > 0)
-      
-      return searchParts.every(part => {
-        if (/^\d+$/.test(part)) {
-          const numberRegex = new RegExp(`\\b${part}\\b`)
-          return numberRegex.test(productText)
+    if (inputType !== 'unidade') {
+      finalQty = inputQty * factor
+    }
+
+    setReport(prev => {
+      const newReport = { ...prev }
+      const entry = { 
+        id: Date.now(), 
+        qtd: inputQty, 
+        type: typeLabel, 
+        calc: finalQty 
+      }
+
+      if (newReport[product.id]) {
+        newReport[product.id].total += finalQty
+        newReport[product.id].history.push(entry)
+      } else {
+        newReport[product.id] = {
+          name: product.name,
+          code: product.code,
+          total: finalQty,
+          history: [entry]
         }
-        return productText.includes(part)
-      })
+      }
+      return newReport
     })
-
-    if (matches.length === 0) {
-      setFeedback(`Não achei "${cleanSearchTerm}". Tente ser mais específico.`)
-      setSearchMatches([])
-    } else if (matches.length === 1) {
-      setFeedback("Produto encontrado!")
-      setSearchMatches([])
-      setSelectedProduct(matches[0])
-    } else {
-      setFeedback(`Achei ${matches.length} opções para "${cleanSearchTerm}". Selecione:`)
-      setSearchMatches(matches)
-      setSelectedProduct(null)
-    }
-
-    setCurrentQty(quantity)
-    setCurrentUnit(unit)
+    setStatus(`Adicionado: +${finalQty}`)
   }
 
-  const calculateTotal = (product, qty, unit) => {
-    if (!product) return 0
-    if (unit === 'palete') return qty * product.factor_pallet
-    if (unit === 'camada') return qty * product.factor_layer
-    return qty * product.factor_box 
-  }
-
-  const confirmItem = () => {
-    if (!selectedProduct) return
-
-    const total = calculateTotal(selectedProduct, currentQty, currentUnit)
-    
-    const newItem = {
-      id: Date.now(),
-      erp_code: selectedProduct.erp_code,
-      name: selectedProduct.name,
-      qty_input: currentQty,
-      unit_input: currentUnit,
-      total_boxes: total
+  const clearReport = () => {
+    if(window.confirm("Limpar relatório?")) {
+      setReport({})
+      setStatus("Relatório limpo")
+      setTranscript("")
     }
-
-    setInventoryList([...inventoryList, newItem])
-    setSelectedProduct(null)
-    setSearchMatches([])
-    setTranscript("")
-    setFeedback("Salvo! Próximo?")
   }
 
   const exportData = () => {
-    let csvContent = "data:text/csv;charset=utf-8," 
-      + "CODIGO;PRODUTO;QTD_FALADA;UNIDADE;TOTAL_CAIXAS\n"
-      + inventoryList.map(item => 
-          `${item.erp_code};${item.name};${item.qty_input};${item.unit_input};${item.total_boxes}`
-        ).join("\n")
+    const items = Object.values(report)
+    if (items.length === 0) return alert("Nada para exportar")
+    
+    let csvContent = "data:text/csv;charset=utf-8,CODIGO;PRODUTO;TOTAL_UNIDADES;HISTORICO\n" +
+      items.map(item => {
+          const historyStr = item.history.map(h => `${h.qtd}${h.type}`).join(" + ")
+          return `${item.code};${item.name};${item.total};${historyStr}`
+      }).join("\n")
 
-    const encodedUri = encodeURI(csvContent)
     const link = document.createElement("a")
-    link.setAttribute("href", encodedUri)
-    link.setAttribute("download", "contagem_estoque.csv")
+    link.href = encodeURI(csvContent)
+    link.download = `inventario_${new Date().toLocaleDateString()}.csv`
     document.body.appendChild(link)
     link.click()
   }
 
   return (
-    <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto', textAlign: 'center' }}>
-      <h1>CargVoice Coletor 📦</h1>
-      
-      <div style={{ backgroundColor: '#333', padding: '20px', borderRadius: '15px', marginBottom: '20px' }}>
-        <p style={{ color: '#aaa', minHeight: '1.5em' }}>{transcript || "..."}</p>
-        <p style={{ fontSize: '1.2rem', color: '#4CAF50', fontWeight: 'bold' }}>{feedback}</p>
-        
-        <button 
-          onClick={startListening}
-          disabled={isListening}
-          style={{
-            fontSize: '1.5rem', padding: '15px 30px', borderRadius: '50px',
-            backgroundColor: isListening ? '#f44336' : '#2196F3', color: 'white', border: 'none', cursor: 'pointer', marginTop: '10px'
-          }}
-        >
-          {isListening ? 'Ouvindo...' : '🎙️ FALAR'}
-        </button>
-      </div>
-
-      {searchMatches.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
-          <h3>Selecione o correto:</h3>
-          {searchMatches.map(p => (
-            <button 
-              key={p.id} 
-              onClick={() => setSelectedProduct(p)}
-              style={{ padding: '15px', backgroundColor: '#444', border: '1px solid #555', color: 'white', textAlign: 'left', cursor: 'pointer' }}
-            >
-              <strong>{p.erp_code}</strong> - {p.name}
-            </button>
-          ))}
+    <div className="app-container">
+      <header className="app-header">
+        <div className="logo-area">
+          <img src={logoCarg} alt="CargVoice" className="logo" />
         </div>
-      )}
+      </header>
 
-      {selectedProduct && (
-        <div style={{ backgroundColor: '#444', padding: '20px', borderRadius: '10px', border: '2px solid #2196F3', marginBottom: '20px' }}>
-          <h3>{selectedProduct.name}</h3>
+      <main>
+        <div className="control-card">
+          <h1>Carg<span>Voice</span></h1>
+          <p className="hint">Ex: "5 paletes de Skol"</p>
           
-          <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', margin: '15px 0' }}>
-            <div>
-              <label>Fator Palete:</label> <br/>
-              <input 
-                type="number" 
-                value={selectedProduct.factor_pallet} 
-                onChange={(e) => setSelectedProduct({...selectedProduct, factor_pallet: parseInt(e.target.value) || 0})}
-                style={{ width: '60px', padding: '5px', textAlign: 'center' }}
-              />
-            </div>
-            <div>
-              <label>Fator Lastro:</label> <br/>
-              <input 
-                type="number" 
-                value={selectedProduct.factor_layer} 
-                onChange={(e) => setSelectedProduct({...selectedProduct, factor_layer: parseInt(e.target.value) || 0})}
-                style={{ width: '60px', padding: '5px', textAlign: 'center' }}
-              />
-            </div>
-          </div>
-
-          <h2 style={{ color: '#0f0' }}>
-            {currentQty} {currentUnit}(s) = {calculateTotal(selectedProduct, currentQty, currentUnit)} Caixas
-          </h2>
-
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button 
-              onClick={confirmItem}
-              style={{ backgroundColor: '#4CAF50', color: 'white', border: 'none', padding: '15px 30px', fontSize: '1.2rem', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              ✅ SALVAR
-            </button>
-            <button 
-              onClick={() => setSelectedProduct(null)}
-              style={{ backgroundColor: '#f44336', color: 'white', border: 'none', padding: '15px 30px', fontSize: '1.2rem', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              CANCELAR
+          <div className="mic-wrapper">
+            <button className={`mic-button ${isListening ? 'listening' : ''}`} onClick={toggleMic}>
+              <svg viewBox="0 0 24 24" width="32" height="32">
+                <path fill="currentColor" d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path fill="currentColor" d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+              </svg>
             </button>
           </div>
+          
+          <div className="status-text" style={{ color: isListening ? '#22C55E' : '#1F2937' }}>
+            {status}
+          </div>
+          {transcript && <div className="transcript-text">"{transcript}"</div>}
         </div>
-      )}
 
-      {inventoryList.length > 0 && (
-        <div>
-          <h3>📦 Itens Contados ({inventoryList.length})</h3>
-          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px', fontSize: '0.9rem' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#222' }}>
-                  <th style={{ padding: '10px' }}>Cód</th>
-                  <th>Produto</th>
-                  <th>Qtd</th>
-                  <th>Total</th>
-                  <th>Ação</th>
-                </tr>
-              </thead>
-              <tbody>
-                {inventoryList.map((item, index) => (
-                  <tr key={item.id} style={{ borderBottom: '1px solid #333' }}>
-                    <td style={{ padding: '8px' }}>{item.erp_code}</td>
-                    <td>{item.name.substring(0, 15)}...</td>
-                    <td>{item.qty_input} {item.unit_input.substring(0,3)}</td>
-                    <td style={{ color: '#0f0', fontWeight: 'bold' }}>{item.total_boxes}</td>
-                    <td>
-                      <button 
-                        onClick={() => setInventoryList(inventoryList.filter(i => i.id !== item.id))}
-                        style={{ padding: '2px 8px', backgroundColor: '#f44336', fontSize: '0.8rem' }}
-                      >
-                        X
-                      </button>
-                    </td>
+        {Object.keys(report).length > 0 && (
+          <div className="report-card">
+            <div className="report-header">
+              <h2>Relatório ({Object.keys(report).length})</h2>
+              <div className="actions">
+                <button onClick={clearReport} className="btn-secondary">Limpar</button>
+                <button onClick={exportData} className="btn-primary-small">CSV</button>
+              </div>
+            </div>
+            
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Produto</th>
+                    <th className="mobile-hide">Histórico</th>
+                    <th className="right-align">Total</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {Object.values(report).map((item) => (
+                    <tr key={item.code}>
+                      <td>
+                        <span className="prod-name">{item.name}</span>
+                        <span className="prod-code">Cód: {item.code}</span>
+                        <div className="mobile-only-history">
+                           {item.history.map((h, i) => (
+                            <span key={i} className="tag-mini">{h.qtd}{h.type}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="mobile-hide">
+                        <div className="history-tags">
+                          {item.history.map((h, i) => (
+                            <span key={i} className="tag">{h.qtd} {h.type}</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="total-cell">{item.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-
-          <button 
-            onClick={exportData}
-            style={{ marginTop: '20px', backgroundColor: '#FF9800', color: 'black', padding: '15px 30px', border: 'none', borderRadius: '5px', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem', width: '100%' }}
-          >
-            📥 BAIXAR EXCEL/CSV
-          </button>
-        </div>
-      )}
+        )}
+      </main>
     </div>
   )
 }
